@@ -30,6 +30,7 @@ import { AlertCircleIcon, ChevronDownIcon, PhoneIcon } from '@/components/ui/ico
 import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
 import { useMutation } from '@tanstack/react-query';
 import { collectiondata,fetchLocations, fetchLocalitiesByMunicipality } from '@/api/datacollection';
+import { propertiesdata } from '@/api/properties';
 import { Heading } from '@/components/ui/heading';
 import { HStack } from '@/components/ui/hstack';
 import {  Select,
@@ -47,15 +48,34 @@ import * as Location from 'expo-location';
 import FontAwesome5 from '@expo/vector-icons/FontAwesome5';
 import { Alert, AlertIcon, AlertText } from '@/components/ui/alert';
 import { Icon } from '@/components/ui/icon';
-import { SaveIcon, MapPinIcon } from 'lucide-react-native';
+import { SaveIcon, MapPinIcon, PlusIcon } from 'lucide-react-native';
 import { useAuth } from '@/store/authStore';
 import { useCounterStore } from '@/store/counterStore';
 import { showCustomToast } from '@/components/ui/custom-toast';
 import { Spinner } from '@/components/ui/spinner';
 import { useOfflineStore } from '@/store/offlineStore';
 //import NetInfo from '@react-native-community/netinfo';
+import { Modal, ModalBackdrop, ModalContent, ModalHeader, ModalBody, ModalFooter } from "@/components/ui/modal";
+import { ScrollView as RNScrollView } from 'react-native';
 
-
+const styles = StyleSheet.create({
+  titleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  stepContainer: {
+    gap: 8,
+    marginBottom: 2,
+  },
+  reactLogo: {
+    height: 178,
+    width: 290,
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+  },
+});
 
 const requestLocationPermission = async () => {
   const { status } = await Location.requestForegroundPermissionsAsync();
@@ -80,6 +100,7 @@ export interface FormDataType {
     longitude: number | null;
     accuracy: number | null;
   };
+ // propertyDetails?: PropertyDetail[];
 }
 
 
@@ -99,6 +120,17 @@ interface AccuracyStats {
   current: number | null;
   previous: number | null;
   best: number | null;
+}
+
+export interface PropertyDetail {
+  valuation_no: string;
+  valuation_amt: number;
+  duration: number;
+  property_type: string;
+  units: number;
+  tax_rate: number;
+  tax_amt: number;
+  data_typeInfo: string;
 }
 
 export default function add() {
@@ -127,6 +159,18 @@ export default function add() {
       longitude: null as number | null,
       accuracy: null as number | null
     }
+  });
+
+  const [propertyDetails, setPropertyDetails] = useState<PropertyDetail[]>([]);
+  const [currentProperty, setCurrentProperty] = useState<PropertyDetail>({
+    valuation_no: '',
+    valuation_amt: 0,
+    duration: 0,
+    property_type: '',
+    units: 0,
+    tax_rate: 2.75,
+    tax_amt: 0,
+    data_typeInfo: ''
   });
 
   // Add useEffect to update agent_id when user data loads
@@ -217,6 +261,9 @@ export default function add() {
                            formData.id_type === 'passport' ? 'Format: G12345678' :
                            'Invalid ID format';
     }
+    if(propertyDetails.length === 0){
+      newErrors.property_details = 'Property details are required';
+    }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -226,8 +273,58 @@ export default function add() {
   const handleSubmit = () => {
     setSubmitAttempted(true);
     if (validateForm()) {
-      stopLocationTracking();
-      collectionMutation.mutate(formData);
+      // First submit the main form data
+      const mainFormData = {
+        ...formData,
+      };
+      
+      collectionMutation.mutate(mainFormData);
+
+      // If there are property details, submit them separately
+      if (propertyDetails.length > 0) {
+        // Create an array of promises
+        const submissionPromises = propertyDetails.map(property => {
+          const propertyData = {
+            valuation_no: formData.valuation_no,
+            valuation_amt: property.valuation_amt,
+            duration: property.duration,
+            property_type: formData.data_type_info,
+            units: property.units,
+            tax_rate: property.tax_rate,
+            tax_amt: property.tax_amt,
+            data_typeInfo: property.data_typeInfo
+          };
+          
+          // Return a promise for each mutation
+          return new Promise((resolve, reject) => {
+            PropertyMutation.mutate(propertyData, {
+              onSuccess: () => resolve(true),
+              onError: (error) => reject(error)
+            });
+          });
+        });
+        
+        // Wait for all submissions to complete
+        Promise.all(submissionPromises)
+          .then(() => {
+            // Clear property details after all submissions are successful
+            setPropertyDetails([]);
+            setCurrentProperty({
+              valuation_no: '',
+              valuation_amt: 0,
+              duration: 0,
+              property_type: '',
+              units: 0,
+              tax_rate: 2.75,
+              tax_amt: 0,
+              data_typeInfo: ''
+              
+            });
+          })
+          .catch(error => {
+            console.error("Error submitting properties:", error);
+          });
+      }
     }
   };
 
@@ -296,17 +393,6 @@ const handleLocalityChange = (value: string) => {
 
 
     
-  // if (lloading) {
-  //   return (
-  //     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-  //       <Text>Loading localities...</Text>
-  //     </View>
-  //   );
-  // }
-
-  // if(lerror){
-  //   console.log('message:',lerror)
-  // }
   console.log('Municipality:', municipalities);
   console.log('Selected Municipality Code:', selectedCodes.municipalityCode);
   console.log('Localities:', localities);
@@ -376,8 +462,89 @@ const handleLocalityChange = (value: string) => {
     },
   });
 
-  console.log(localities)
+  const propertiesdataMutation = useMutation({
+    mutationFn: (data: PropertyDetail) => propertiesdata(data),
+    onSuccess: (data) => {
+      toast.show({
+        placement: "top",
+        render: ({ id }: { id: string }) => {
+          return (
+            <Toast nativeID={id} action="success" variant="solid">
+              <VStack space="xs">
+                <ToastTitle>Success</ToastTitle>
+                <ToastDescription>
+                  Property details saved successfully
+                </ToastDescription>
+              </VStack>
+            </Toast>
+          );
+        },
+      });
+    },
+    onError: (error) => {
+      toast.show({
+        placement: "top",
+        render: ({ id }: { id: string }) => {
+          return (
+            <Toast nativeID={id} action="error" variant="solid">
+              <VStack space="xs">
+                <ToastTitle>Error</ToastTitle>
+                <ToastDescription>
+                  {error.message || 'Failed to save property details. Please try again.'}
+                </ToastDescription>
+              </VStack>
+            </Toast>
+          );
+        },
+      });
+    },
+  });
 
+  // Property table
+
+  const PropertyMutation = useMutation({
+    mutationFn: (data: PropertyDetail) => propertiesdata(data),
+    onSuccess: (data) => {
+      // Show success toast
+      toast.show({
+        placement: "top",
+        render: ({ id }: { id: string }) => {
+          return (
+            <Toast nativeID={id} action="success" variant="solid">
+              <VStack space="xs">
+                <ToastTitle>Success</ToastTitle>
+                <ToastDescription>
+                  Data has been successfully saved
+                </ToastDescription>
+              </VStack>
+            </Toast>
+          );
+        },
+      });
+    },
+    onError: (error) => {
+      // Show error toast
+      toast.show({
+        placement: "top",
+        render: ({ id }: { id: string }) => {
+          return (
+            <Toast nativeID={id} action="error" variant="solid">
+              <VStack space="xs">
+                <ToastTitle>Error</ToastTitle>
+                <ToastDescription>
+                  {error.message || 'Failed to save property data. Please try again.'}
+                </ToastDescription>
+              </VStack>
+            </Toast>
+          );
+        },
+      });
+    }
+  });
+
+  console.log(localities)
+console.log(propertiesdataMutation)
+console.log(PropertyMutation)
     // Handler for electoral area change
     // const handleElectoralAreaChange = (value: string) => {
     //   setFormData(prev => ({
@@ -456,30 +623,43 @@ console.log(municipalities);
 
   const withinRange = formData.geolocation.accuracy !== null && formData.geolocation.accuracy <= 4;
 
-/*   useEffect(() => {
-    const unsubscribe = NetInfo.addEventListener((state: NetInfoState) => {
-      if (!state.isConnected) {
-        toast.show({
-          placement: "top",
-          render: ({ id }: { id: string }) => {
-            return (
-              <Toast nativeID={id} action="warning" variant="solid">
-                <VStack space="xs">
-                  <ToastTitle>No Internet Connection</ToastTitle>
-                  <ToastDescription>
-                    Data will be saved locally and synced when online
-                  </ToastDescription>
-                </VStack>
-              </Toast>
-            );
-          },
-        });
-      }
-    });
 
-    return () => unsubscribe();
-  }, []);
- */
+   // Add duration options
+ const durationOptions = [
+  { label: '1 Month', value: '1' },
+  { label: '3 Months', value: '3' },
+  { label: '6 Months', value: '6' },
+  { label: '1 Year', value: '12' },
+  { label: '1 Year 6 Months', value: '18' },
+  { label: '2 Years', value: '24' },
+  { label: '3 Years', value: '36' },
+];
+   // Add duration options
+ const propertyTypeOptions = [
+  { label: '2 Bedroom', value: '2 bedroom' },
+  { label: 'Chamber and Hall', value: 'chamber and hall' },
+  { label: 'Flat', value: 'flat' },
+  { label: 'Single Room', value: 'single room' },
+  { label: '3 Bedroom', value: '3 bedroom' },
+  { label: '4 Bedroom', value: '4 bedroom' },
+
+];
+
+    //No_of_units
+    const propertyUnitsOptions = [
+      { label: '1', value: '1' },
+      { label: '2', value: '2' },
+      { label: '3', value: '3' },
+      { label: '4', value: '4' },
+      { label: '5', value: '5' },
+      { label: '6', value: '6' },
+      { label: '7', value: '7' },
+      { label: '8', value: '8' },
+      { label: '9', value: '9' },
+      { label: '10', value: '10' },
+       
+    ];
+
   // Add this helper function
   const formatIdNumber = (text: string, idType: string) => {
     // Remove all non-alphanumeric characters
@@ -523,31 +703,106 @@ console.log(municipalities);
     return cleaned;
   };
 
-  // Optional: Add network error handling
-  /* useEffect(() => {
-    const unsubscribe = NetInfo.addEventListener((state: any) => {
-      if (!state.isConnected) {
+
+  const [showPropertyModal, setShowPropertyModal] = useState(false);
+
+  const calculateTaxAmount = (valuation_amt: number, duration: number, units: number, tax_rate: number): number => {
+    const amount = valuation_amt || 0;
+    const months = duration || 0;
+    const numUnits = units || 0;
+    const rate = tax_rate || 2.75;
+    return Number(((amount * months * numUnits) * (rate / 100)).toFixed(2));
+  };
+  const handlePropertyDetailChange = (field: keyof PropertyDetail, value: string) => {
+    setCurrentProperty(prev => {
+      const updated = { ...prev };
+      
+      // Convert string values to numbers for numeric fields
+      if (field === 'valuation_amt' || field === 'duration' || field === 'units' || field === 'tax_rate') {
+        // Only convert to number when the field loses focus or when calculating tax
+        // For now, just store the string value to avoid typing delays
+        updated[field] = value === '' ? 0 : Number(value);
+      } else if (field === 'valuation_no' || field === 'property_type' || field === 'data_typeInfo') {
+        updated[field] = value;
+      }
+
+      // Calculate tax amount when relevant fields change
+      if (field === 'valuation_amt' || field === 'duration' || field === 'units' || field === 'tax_rate') {
+        updated.tax_amt = calculateTaxAmount(
+          field === 'valuation_amt' ? (value === '' ? 0 : Number(value)) : prev.valuation_amt,
+          field === 'duration' ? (value === '' ? 0 : Number(value)) : prev.duration,
+          field === 'units' ? (value === '' ? 0 : Number(value)) : prev.units,
+          field === 'tax_rate' ? (value === '' ? 0 : Number(value)) : prev.tax_rate
+        );
+      }
+
+      return updated;
+    });
+  };
+
+  const handleAddPropertyDetail = () => {
+    if (!currentProperty.valuation_amt || !currentProperty.duration || !currentProperty.units) {
         toast.show({
           placement: "top", 
-          render: ({ id }: { id: string }) => {
-            return (
-              <Toast nativeID={id} action="warning" variant="solid">
+        render: ({ id }) => (
+          <Toast nativeID={id} action="error" variant="solid">
                 <VStack space="xs">
-                  <ToastTitle>No Internet Connection</ToastTitle>
+              <ToastTitle>Error</ToastTitle>
                   <ToastDescription>
-                    Data will be saved locally and synced when online
+                Please fill in all required fields
                   </ToastDescription>
                 </VStack>
               </Toast>
-            );
-          },
-        });
-      }
-    });
+        ),
+      });
+      return;
+    }
 
-    return () => unsubscribe();
-  }, []);
- */
+    // Add the property to the list with the current valuation_no
+    const propertyToAdd = {
+          ...currentProperty,
+          valuation_no: formData.valuation_no //  valuation_no is set from the main form
+        };
+    setPropertyDetails(prev => [...prev, propertyToAdd]);
+
+    // Reset the form but keep the valuation_no
+    setCurrentProperty({
+      valuation_no: formData.valuation_no,
+      valuation_amt: 0,
+      duration: 0,
+      property_type: '',
+      units: 0,
+      tax_rate: 2.75,
+      tax_amt: 0,
+      data_typeInfo: ''
+     
+    });
+    
+    // Show success toast
+    toast.show({
+      placement: "top",
+      render: ({ id }) => (
+        <Toast nativeID={id} action="success" variant="solid">
+          <VStack space="xs">
+            <ToastTitle>Success</ToastTitle>
+            <ToastDescription>
+              Property added successfully
+            </ToastDescription>
+          </VStack>
+        </Toast>
+      ),
+    });
+  };
+
+  const handleCloseModal = () => {
+    setShowPropertyModal(false);
+
+  };
+
+  const canAddPropertyDetails = () => {
+    return formData.valuation_no && formData.data_type_info;
+  };
+
   return (
     
     <ScrollView className="flex-1 bg-gray-50 px-4">
@@ -609,7 +864,7 @@ console.log(municipalities);
 
   <VStack space="lg">
     <HStack space="md" style={{ alignItems: 'flex-start' }}>
-      <VStack style={{ flex: 1 }}>
+      <VStack style={{ flex: 1}}>
         <FormControlLabel>
           <FormControlLabelText style={{ color: '#334155', fontSize: 14, fontWeight: '600', marginBottom: 2 }}>
             Surname
@@ -1122,7 +1377,9 @@ console.log(municipalities);
         >
           <InputField
             value={formData.valuation_no}
-            onChangeText={(text:string) => setFormData(prev => ({...prev, valuation_no: text}))}
+            onChangeText={(text:string) => {
+              setFormData(prev => ({...prev, valuation_no: text}));
+            }}
             style={{ fontSize: 14, color: '#334155', paddingLeft: 12 }}
           />
         </Input>
@@ -1172,13 +1429,13 @@ console.log(municipalities);
       </FormControlLabel>
       <Select
         selectedValue={formData.data_type}
-        onValueChange={(value: string) =>
+        onValueChange={(value: string) => {
           setFormData((prev) => ({
             ...prev,
             data_type: value,
             data_type_info: value === 'business' ? 'business' : '',
-          }))
-        }
+          }));
+        }}
       >
         <SelectTrigger 
           style={{ 
@@ -1223,11 +1480,12 @@ console.log(municipalities);
         </FormControlLabelText>
       </FormControlLabel>
       {formData.data_type === 'property' ? (
+        <VStack>
         <Select
           selectedValue={formData.data_type_info}
-          onValueChange={(value: string) =>
-            setFormData((prev) => ({ ...prev, data_type_info: value }))
-          }
+            onValueChange={(value: string) => {
+              setFormData((prev) => ({ ...prev, data_type_info: value }));
+            }}
         >
           <SelectTrigger 
             style={{ 
@@ -1257,6 +1515,32 @@ console.log(municipalities);
             </SelectContent>
           </SelectPortal>
         </Select>
+          
+          {/* Floating Button */}
+          <TouchableOpacity
+            style={{
+              position: 'absolute',
+              right: -10,
+              top: 40,
+              backgroundColor: canAddPropertyDetails() ? '#2563EB' : '#94A3B8',
+              width: 40,
+              height: 40,
+              borderRadius: 20,
+              justifyContent: 'center',
+              alignItems: 'center',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.25,
+              shadowRadius: 3.84,
+              elevation: 5,
+              zIndex: 1
+            }}
+            onPress={() => canAddPropertyDetails() && setShowPropertyModal(true)}
+            disabled={!canAddPropertyDetails()}
+          >
+            <PlusIcon size={24} color="white" />
+          </TouchableOpacity>
+        </VStack>
       ) : (
         <Input 
           isDisabled
@@ -1282,13 +1566,215 @@ console.log(municipalities);
   </HStack>
 </Card>
 
-  <Alert action="error" className="gap-3">
+<Modal isOpen={showPropertyModal} onClose={handleCloseModal}>
+  <ModalBackdrop />
+  <ModalContent>
+    <ModalHeader>
+      <Heading size="md">Property Details</Heading>
+    </ModalHeader>
+    <ModalBody>
+      <RNScrollView>
+        <VStack space="md">        
+          <FormControl>
+            <FormControlLabel>
+              <FormControlLabelText>Property Type</FormControlLabelText>
+            </FormControlLabel>
+            <Select
+              selectedValue={currentProperty.data_typeInfo}
+              onValueChange={(value: string) => handlePropertyDetailChange('data_typeInfo', value)}
+            >
+              <SelectTrigger 
+                style={{ 
+                  borderColor: '#CBD5E1',
+                  borderWidth: 1,
+                  borderRadius: 8,
+                  backgroundColor: '#F8FAFC',
+                  height: 40
+                }}
+              >
+                <SelectInput 
+                  placeholder="Select property type"
+                  style={{ 
+                    fontSize: 14,
+                    color: '#334155',
+                    paddingLeft: 12
+                  }}
+                />
+                <ChevronDownIcon style={{ marginRight: 12 }} color="#64748B" />
+              </SelectTrigger>
+              <SelectPortal>
+                <SelectBackdrop />
+                <SelectContent>
+                  {propertyTypeOptions.map((option) => (
+                    <SelectItem 
+                      key={option.value} 
+                      label={option.label} 
+                      value={option.value} 
+                      />
+                    ))}
+                </SelectContent>
+              </SelectPortal>
+            </Select>
+          </FormControl>
+          
+          <HStack space={10} style={{ alignItems: 'flex-start' }}>
+            <FormControl style={{ flex: 1 }}>
+              <FormControlLabel>
+                <FormControlLabelText>Amount</FormControlLabelText>
+              </FormControlLabel>
+              <Input style={{ flex: 1 }}>
+                <InputField
+                  value={currentProperty.valuation_amt.toString()}
+                  onChangeText={(value) => handlePropertyDetailChange('valuation_amt', value)}
+                  keyboardType="numeric"
+                  placeholder="Enter valuation amount"
+                  />
+              </Input>
+            </FormControl>
+            
+            <FormControl style={{ flex: 1 }}>
+              <FormControlLabel>
+                <FormControlLabelText>Duration</FormControlLabelText>
+              </FormControlLabel>
+              <Select
+              selectedValue={currentProperty.duration ? currentProperty.duration.toString() : ""}
+              onValueChange={(value: string) => handlePropertyDetailChange('duration', value)}
+              >
+              <SelectTrigger 
+              style={{ 
+              borderColor: '#CBD5E1',
+              borderWidth: 1,
+              borderRadius: 8,
+              backgroundColor: '#F8FAFC',
+              height: 40
+              }}
+              >
+              <SelectInput 
+              placeholder="Select duration"
+              style={{ 
+              fontSize: 14,
+              color: '#334155',
+              paddingLeft: 12
+              }}
+              />
+              <ChevronDownIcon style={{ marginRight: 12 }} color="#64748B" />
+              </SelectTrigger>
+              <SelectPortal>
+              <SelectBackdrop />
+              <SelectContent>
+              {durationOptions.map((option) => (
+              <SelectItem 
+              key={option.value} 
+              label={option.label} 
+              value={option.value} 
+              />
+              ))}
+              </SelectContent>
+              </SelectPortal>
+              </Select>
+            </FormControl>
+          </HStack>
+          <HStack space={10} style={{ alignItems: 'flex-start' }}>
+          <FormControl style={{ flex: 1 }}>
+            <FormControlLabel>
+              <FormControlLabelText>Units</FormControlLabelText>
+            </FormControlLabel>
+            <Select
+              selectedValue={currentProperty.units.toString()}
+              onValueChange={(value: string) => handlePropertyDetailChange('units', value)}
+            >
+              <SelectTrigger 
+                style={{ 
+                  borderColor: '#CBD5E1',
+                  borderWidth: 1,
+                  borderRadius: 8,
+                  backgroundColor: '#F8FAFC',
+                  height: 40
+                }}
+              >
+                <SelectInput 
+                  placeholder="Select number of units"
+                  style={{ 
+                    fontSize: 14,
+                    color: '#334155',
+                    paddingLeft: 12
+                  }}
+                />
+                <ChevronDownIcon style={{ marginRight: 12 }} color="#64748B" />
+              </SelectTrigger>
+              <SelectPortal>
+                <SelectBackdrop />
+                <SelectContent>
+                  {propertyUnitsOptions.map((option) => (
+                    <SelectItem 
+                      key={option.value} 
+                      label={option.label} 
+                      value={option.value} 
+                    />
+                  ))}
+                </SelectContent>
+              </SelectPortal>
+            </Select>
+          </FormControl>
+
+          <FormControl style={{ flex: 1 }}>
+            <FormControlLabel>
+              <FormControlLabelText>Tax Rate (%)</FormControlLabelText>
+            </FormControlLabel>
+            <Input style={{ flex: 1 }}>
+              <InputField
+                value={currentProperty.tax_rate.toString()}
+                onChangeText={(value) => handlePropertyDetailChange('tax_rate', value)}
+                keyboardType="numeric"
+                placeholder="Enter tax rate"
+              />
+            </Input>
+          </FormControl>
+          </HStack>
+          <Button onPress={handleAddPropertyDetail}>
+            <ButtonText>Add Property</ButtonText>
+          </Button>
+
+          {propertyDetails.length > 0 && (
+            <VStack space="md">
+              <Heading size="sm">Added Properties</Heading>
+              {propertyDetails.map((property, index) => (
+                <Card
+                  key={`${property.valuation_no}-${property.duration}-${index}`}
+                  size="sm"
+                  style={{ marginBottom: 8 }}
+                >
+                  <VStack space="sm">
+                    <Text>Valuation No: {property.valuation_no}</Text>
+                    <Text>Amount: ₵{(property.valuation_amt || 0).toLocaleString()}</Text>
+                    <Text>Duration: {property.duration} months</Text>
+                    <Text>Units: {property.units}</Text>
+                    <Text>Tax Rate: {property.tax_rate}%</Text>
+                    <Text>Tax Amount: ₵{(property.tax_amt || 0).toLocaleString()}</Text>
+                    <Text>Type: {property.data_typeInfo}</Text>
+                  </VStack>
+                </Card>
+              ))}
+            </VStack>
+          )}
+        </VStack>
+      </RNScrollView>
+    </ModalBody>
+    <ModalFooter>
+      <Button onPress={handleCloseModal}>
+        <ButtonText>Done</ButtonText>
+      </Button>
+    </ModalFooter>
+  </ModalContent>
+</Modal>
+
+  {/* <Alert action="error" className="gap-3">
   
     <AlertText className="text-typography-900" size="sm">
     <Text className="mr-2 font-semibold text-typography-900">Heads up:</Text>
      Once done, this action cannot be undone
   </AlertText>
-</Alert>
+</Alert> */}
 
 <VStack space="md" style={{ marginVertical: 16 }}>
   <TouchableOpacity
@@ -1332,25 +1818,5 @@ console.log(municipalities);
 </View>    
    </FormControl>
    </ScrollView> 
-      
-  )
+      );
 }
-
-const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 2,
-  },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-  },
-});
